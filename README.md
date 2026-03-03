@@ -1,0 +1,96 @@
+# Benchmark App
+
+Projeto Java básico para testes e artigo técnico. Dados genéricos, sem regra de negócio.
+
+## Estrutura
+
+- `src/main/java/com/benchmark/app/` – aplicação Spring Boot
+- `src/main/java/com/benchmark/app/model/` – entidade genérica (Item)
+- `src/main/java/com/benchmark/app/dto/` – DTOs para JSON
+- `src/main/proto/` – definições Protobuf (sync.proto)
+- Código gerado do proto em `target/generated-sources/protobuf/java`
+- `scripts/` – script Python para popular o banco com itens aleatórios
+
+## Build
+
+```bash
+mvn clean compile
+```
+
+Gera as classes Java a partir dos `.proto` na pasta `src/main/proto`.
+
+## Run
+
+```bash
+mvn spring-boot:run
+```
+
+App sobe na porta 8081. Endpoint: `GET /api/health`.
+
+## Banco de dados e dados de teste
+
+Com PostgreSQL no ar (ex.: `docker compose up db -d`) e `.env` configurado, a aplicação sobe normalmente: o Hibernate cria a tabela `item` automaticamente se ela não existir (`ddl-auto=update`). Com a tabela vazia, o snapshot na inicialização gera arquivos com 0 itens.
+
+Para popular dados e testar com volume:
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/gerar_itens_aleatorios.py 1000
+```
+
+O script lê `SPRING_DATASOURCE_*` do `.env` e usa `CREATE TABLE IF NOT EXISTS item` (compatível com a entidade JPA). Depois, reinicie o app para gerar snapshots com os dados.
+
+## Snapshot na inicialização
+
+Ao subir a aplicação (`mvn spring-boot:run`), é executado um snapshot dos dados:
+
+1. Lê todos os itens do PostgreSQL.
+2. Gera um arquivo **Protobuf** (`.bin`) com o conteúdo de `SnapshotResponse` (timestamp, `generated_at`, lista de `Item`).
+3. Gera um arquivo **SQLite** (`.sqlite`) com a mesma tabela `item` e os mesmos registros.
+4. Cria o bucket no MinIO se não existir e envia os dois arquivos com **nomes fixos** `snapshot.bin` e `snapshot.sqlite` (sempre sobrescreve; uma única versão para o front/mobile substituírem o cache local .db).
+
+É necessário ter PostgreSQL e MinIO no ar e configurar no `.env`: `SPRING_DATASOURCE_*`, `MINIO_URL`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET`.
+
+## Endpoints para medição (benchmark)
+
+Três endpoints para comparar tempo, banda e processamento entre formatos:
+
+| Endpoint | Descrição |
+|----------|-----------|
+| `GET /api/snapshot/download/bin` | Download do snapshot em Protobuf (`.bin`, attachment `snapshot.bin`) |
+| `GET /api/snapshot/download/sqlite` | Download do snapshot em SQLite (`.sqlite`, attachment `snapshot.sqlite`) |
+| `GET /api/items` | Lista todos os itens em JSON |
+
+Cada resposta inclui o header **`X-Processing-Ms`** com o tempo de processamento no servidor (ms), para benchmark.
+
+### Script de benchmark (Python)
+
+Mede tempo de transação (cliente), banda (tamanho da resposta) e processamento (servidor, via header):
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/benchmark_endpoints.py [--url http://localhost:8081] [--runs 3] [--csv resultado.csv]
+```
+
+### Benchmark de leitura para mapa
+
+Mede o tempo desde o request até a lista de `(latitude, longitude)` pronta para uso no mapa (GET + deserialização + extração), para Protobuf, SQLite e JSON:
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/benchmark_map_leitura.py [--url http://localhost:8081] [--runs 3]
+```
+
+O código Python do proto está em `scripts/benchmark/sync_pb2.py`. Para regenerar a partir do `.proto`: `protoc -I src/main/proto --python_out=scripts src/main/proto/sync.proto` (requer `protobuf-compiler` instalado).
+
+### Benchmark de deserialização isolada
+
+Mede apenas o tempo de parse (sem rede): um GET por formato, depois N deserializações em memória. Útil para comparar custo de interpretação Protobuf vs JSON vs SQLite.
+
+```bash
+python scripts/benchmark_deserializacao.py [--url http://localhost:8081] [--runs 10]
+```
+
+### Testes adicionais (resultados-benchmark.md)
+
+Em `resultados-benchmark.md` estão descritos e com tabelas pré-prontas: **testes com muitos campos** (modelo com 16 campos por item), **escala variável** (50k a 1M itens), **deserialização isolada** e **adendo com compressão (gzip)**. O script `gerar_itens_aleatorios.py` já gera todos os campos; após resetar o banco e popular de novo, reinicie o app e rode os scripts de benchmark para preencher as tabelas.

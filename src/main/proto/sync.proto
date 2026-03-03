@@ -1,0 +1,30 @@
+syntax = "proto3";
+package benchmark.sync;
+
+option java_package = "com.benchmark.app.proto";
+option java_outer_classname = "SyncProto";
+
+message SnapshotResponse {
+    int64 snapshot_timestamp = 1;
+    string generated_at = 2;
+    repeated Item items = 3;
+}
+
+message Item {
+    int64 id = 1;
+    double value_a = 2;
+    double value_b = 3;
+    string label = 4;
+    double latitude = 5;
+    double longitude = 6;
+    double altitude = 7;
+    int64 created_at = 8;
+    int64 updated_at = 9;
+    string description = 10;
+    string code = 11;
+    string category = 12;
+    string status = 13;
+    int32 count = 14;
+    double score = 15;
+    string metadata = 16;
+}
