@@ -3,7 +3,7 @@ package com.benchmark.app.controller;
 import com.benchmark.app.dto.ItemDTO;
 import com.benchmark.app.model.ItemEntity;
 import com.benchmark.app.repository.ItemRepository;
-import com.benchmark.app.service.SnapshotExportService;
+import com.benchmark.app.service.SnapshotStorageService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -22,14 +22,24 @@ public class SnapshotDownloadController {
 
     private static final String SNAPSHOT_BIN_FILENAME = "snapshot.bin";
     private static final String SNAPSHOT_SQLITE_FILENAME = "snapshot.sqlite";
+    private static final String SNAPSHOT_JSON_FILENAME = "snapshot.json";
+    private static final String SNAPSHOT_MAP_BIN_FILENAME = "snapshot-map.bin";
+    private static final String SNAPSHOT_MAP_JSON_FILENAME = "snapshot-map.json";
+    private static final String SNAPSHOT_MAP_SQLITE_FILENAME = "snapshot-map.sqlite";
+    private static final String OBJECT_SNAPSHOT_BIN = "snapshot.bin";
+    private static final String OBJECT_SNAPSHOT_SQLITE = "snapshot.sqlite";
+    private static final String OBJECT_SNAPSHOT_JSON = "snapshot.json";
+    private static final String OBJECT_SNAPSHOT_MAP_BIN = "snapshot-map.bin";
+    private static final String OBJECT_SNAPSHOT_MAP_JSON = "snapshot-map.json";
+    private static final String OBJECT_SNAPSHOT_MAP_SQLITE = "snapshot-map.sqlite";
 
     private final ItemRepository itemRepository;
-    private final SnapshotExportService snapshotExportService;
+    private final SnapshotStorageService snapshotStorageService;
 
     public SnapshotDownloadController(ItemRepository itemRepository,
-                                      SnapshotExportService snapshotExportService) {
+                                      SnapshotStorageService snapshotStorageService) {
         this.itemRepository = itemRepository;
-        this.snapshotExportService = snapshotExportService;
+        this.snapshotStorageService = snapshotStorageService;
     }
 
     /**
@@ -39,8 +49,7 @@ public class SnapshotDownloadController {
     @GetMapping("/snapshot/download/bin")
     public ResponseEntity<byte[]> downloadSnapshotBin() {
         long startMs = System.currentTimeMillis();
-        List<ItemEntity> items = itemRepository.findAllByOrderByIdAsc();
-        byte[] body = snapshotExportService.buildProtoSnapshot(items);
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_BIN);
         long processingMs = System.currentTimeMillis() - startMs;
 
         HttpHeaders headers = new HttpHeaders();
@@ -59,15 +68,94 @@ public class SnapshotDownloadController {
      * Para medição de tempo, banda e processamento.
      */
     @GetMapping("/snapshot/download/sqlite")
-    public ResponseEntity<byte[]> downloadSnapshotSqlite() throws Exception {
+    public ResponseEntity<byte[]> downloadSnapshotSqlite() {
         long startMs = System.currentTimeMillis();
-        List<ItemEntity> items = itemRepository.findAllByOrderByIdAsc();
-        byte[] body = snapshotExportService.buildSqliteSnapshot(items);
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_SQLITE);
         long processingMs = System.currentTimeMillis() - startMs;
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("application/x-sqlite3"));
         headers.setContentDispositionFormData("attachment", SNAPSHOT_SQLITE_FILENAME);
+        headers.setContentLength(body.length);
+        headers.set(HEADER_PROCESSING_MS, String.valueOf(processingMs));
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(body);
+    }
+
+    /**
+     * Download do snapshot full em JSON pré-gerado.
+     */
+    @GetMapping("/snapshot/download/json")
+    public ResponseEntity<byte[]> downloadSnapshotJson() {
+        long startMs = System.currentTimeMillis();
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_JSON);
+        long processingMs = System.currentTimeMillis() - startMs;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setContentDispositionFormData("attachment", SNAPSHOT_JSON_FILENAME);
+        headers.setContentLength(body.length);
+        headers.set(HEADER_PROCESSING_MS, String.valueOf(processingMs));
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(body);
+    }
+
+    /**
+     * Download do snapshot reduzido para mapa em Protobuf pré-gerado.
+     */
+    @GetMapping("/snapshot/download/map-bin")
+    public ResponseEntity<byte[]> downloadMapSnapshotBin() {
+        long startMs = System.currentTimeMillis();
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_MAP_BIN);
+        long processingMs = System.currentTimeMillis() - startMs;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", SNAPSHOT_MAP_BIN_FILENAME);
+        headers.setContentLength(body.length);
+        headers.set(HEADER_PROCESSING_MS, String.valueOf(processingMs));
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(body);
+    }
+
+    /**
+     * Download do snapshot reduzido para mapa em JSON pré-gerado.
+     */
+    @GetMapping("/snapshot/download/map-json")
+    public ResponseEntity<byte[]> downloadMapSnapshotJson() {
+        long startMs = System.currentTimeMillis();
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_MAP_JSON);
+        long processingMs = System.currentTimeMillis() - startMs;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setContentDispositionFormData("attachment", SNAPSHOT_MAP_JSON_FILENAME);
+        headers.setContentLength(body.length);
+        headers.set(HEADER_PROCESSING_MS, String.valueOf(processingMs));
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(body);
+    }
+
+    /**
+     * Download do snapshot reduzido para mapa em SQLite pré-gerado.
+     */
+    @GetMapping("/snapshot/download/map-sqlite")
+    public ResponseEntity<byte[]> downloadMapSnapshotSqlite() {
+        long startMs = System.currentTimeMillis();
+        byte[] body = snapshotStorageService.getObjectBytes(OBJECT_SNAPSHOT_MAP_SQLITE);
+        long processingMs = System.currentTimeMillis() - startMs;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("application/x-sqlite3"));
+        headers.setContentDispositionFormData("attachment", SNAPSHOT_MAP_SQLITE_FILENAME);
         headers.setContentLength(body.length);
         headers.set(HEADER_PROCESSING_MS, String.valueOf(processingMs));
 

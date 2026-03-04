@@ -4,7 +4,7 @@
 
 from google.protobuf import descriptor_pool
 from google.protobuf import message_factory
-from google.protobuf.descriptor_pb2 import FileDescriptorSet, FileDescriptorProto, DescriptorProto, FieldDescriptorProto
+from google.protobuf.descriptor_pb2 import FileDescriptorProto, DescriptorProto, FieldDescriptorProto
 
 # Constantes de tipo do protobuf
 _TYPE_DOUBLE = 1
@@ -38,7 +38,6 @@ item_desc = DescriptorProto(
 )
 
 # SnapshotResponse: snapshot_timestamp=1, generated_at=2, items=3 (repeated Item)
-# Referência ao Item usa number do tipo no FileDescriptorProto (index 1 = Item)
 snapshot_desc = DescriptorProto(
     name="SnapshotResponse",
     field=[
@@ -48,10 +47,31 @@ snapshot_desc = DescriptorProto(
     ],
 )
 
+# MapItem: id=1, latitude=2, longitude=3, updated_at=4
+map_item_desc = DescriptorProto(
+    name="MapItem",
+    field=[
+        FieldDescriptorProto(name="id", number=1, type=_TYPE_INT64, label=1),
+        FieldDescriptorProto(name="latitude", number=2, type=_TYPE_DOUBLE, label=1),
+        FieldDescriptorProto(name="longitude", number=3, type=_TYPE_DOUBLE, label=1),
+        FieldDescriptorProto(name="updated_at", number=4, type=_TYPE_INT64, label=1),
+    ],
+)
+
+# MapSnapshotResponse: snapshot_timestamp=1, generated_at=2, items=3 (repeated MapItem)
+map_snapshot_desc = DescriptorProto(
+    name="MapSnapshotResponse",
+    field=[
+        FieldDescriptorProto(name="snapshot_timestamp", number=1, type=_TYPE_INT64, label=1),
+        FieldDescriptorProto(name="generated_at", number=2, type=_TYPE_STRING, label=1),
+        FieldDescriptorProto(name="items", number=3, type=_TYPE_MESSAGE, label=_LABEL_REPEATED, type_name=".benchmark.sync.MapItem"),
+    ],
+)
+
 file_desc = FileDescriptorProto(
     name="sync.proto",
     package="benchmark.sync",
-    message_type=[item_desc, snapshot_desc],
+    message_type=[item_desc, snapshot_desc, map_item_desc, map_snapshot_desc],
 )
 
 pool = descriptor_pool.DescriptorPool()
@@ -60,5 +80,7 @@ pool.Add(file_desc)
 _factory = message_factory.MessageFactory(pool)
 Item = _factory.GetPrototype(pool.FindMessageTypeByName("benchmark.sync.Item"))
 SnapshotResponse = _factory.GetPrototype(pool.FindMessageTypeByName("benchmark.sync.SnapshotResponse"))
+MapItem = _factory.GetPrototype(pool.FindMessageTypeByName("benchmark.sync.MapItem"))
+MapSnapshotResponse = _factory.GetPrototype(pool.FindMessageTypeByName("benchmark.sync.MapSnapshotResponse"))
 
-__all__ = ["Item", "SnapshotResponse"]
+__all__ = ["Item", "SnapshotResponse", "MapItem", "MapSnapshotResponse"]

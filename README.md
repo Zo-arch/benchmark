@@ -45,25 +45,44 @@ O script lê `SPRING_DATASOURCE_*` do `.env` e usa `CREATE TABLE IF NOT EXISTS i
 Ao subir a aplicação (`mvn spring-boot:run`), é executado um snapshot dos dados:
 
 1. Lê todos os itens do PostgreSQL.
-2. Gera um arquivo **Protobuf** (`.bin`) com o conteúdo de `SnapshotResponse` (timestamp, `generated_at`, lista de `Item`).
-3. Gera um arquivo **SQLite** (`.sqlite`) com a mesma tabela `item` e os mesmos registros.
-4. Cria o bucket no MinIO se não existir e envia os dois arquivos com **nomes fixos** `snapshot.bin` e `snapshot.sqlite` (sempre sobrescreve; uma única versão para o front/mobile substituírem o cache local .db).
+2. Gera snapshots **full**: Protobuf (`snapshot.bin`), SQLite (`snapshot.sqlite`) e JSON (`snapshot.json`).
+3. Gera snapshots **map** (payload reduzido): Protobuf (`snapshot-map.bin`), JSON (`snapshot-map.json`) e SQLite (`snapshot-map.sqlite`).
+4. Cria o bucket no MinIO se não existir e envia os arquivos com nomes fixos (sempre sobrescreve a última versão).
 
 É necessário ter PostgreSQL e MinIO no ar e configurar no `.env`: `SPRING_DATASOURCE_*`, `MINIO_URL`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET`.
 
 ## Endpoints para medição (benchmark)
 
-Três endpoints para comparar tempo, banda e processamento entre formatos:
+Endpoints de **download puro** (arquivo pré-gerado no MinIO):
 
 | Endpoint | Descrição |
 |----------|-----------|
 | `GET /api/snapshot/download/bin` | Download do snapshot em Protobuf (`.bin`, attachment `snapshot.bin`) |
 | `GET /api/snapshot/download/sqlite` | Download do snapshot em SQLite (`.sqlite`, attachment `snapshot.sqlite`) |
-| `GET /api/items` | Lista todos os itens em JSON |
+| `GET /api/snapshot/download/json` | Download do snapshot full em JSON (`.json`, attachment `snapshot.json`) |
+| `GET /api/snapshot/download/map-bin` | Download do snapshot reduzido de mapa em Protobuf |
+| `GET /api/snapshot/download/map-json` | Download do snapshot reduzido de mapa em JSON |
+| `GET /api/snapshot/download/map-sqlite` | Download do snapshot reduzido de mapa em SQLite (`.sqlite`, attachment `snapshot-map.sqlite`) |
+
+Endpoint de JSON dinâmico (útil para comparação, não para transporte puro):
+
+| Endpoint | Descrição |
+|----------|-----------|
+| `GET /api/items` | Lista todos os itens em JSON montando payload em tempo real |
+
+Endpoints de benchmark de geração no servidor (retornam métricas, não payload gigante):
+
+| Endpoint | Descrição |
+|----------|-----------|
+| `GET /api/benchmark/generate/proto-full` | DB + serialização Protobuf full |
+| `GET /api/benchmark/generate/sqlite-full` | DB + serialização SQLite full |
+| `GET /api/benchmark/generate/json-full` | DB + serialização JSON full |
+| `GET /api/benchmark/generate/proto-map` | DB + serialização Protobuf map |
+| `GET /api/benchmark/generate/json-map` | DB + serialização JSON map |
 
 Cada resposta inclui o header **`X-Processing-Ms`** com o tempo de processamento no servidor (ms), para benchmark.
 
-### Script de benchmark (Python)
+### Benchmark de download puro (Python)
 
 Mede tempo de transação (cliente), banda (tamanho da resposta) e processamento (servidor, via header):
 
@@ -72,13 +91,23 @@ pip install -r scripts/requirements.txt
 python scripts/benchmark_endpoints.py [--url http://localhost:8081] [--runs 3] [--csv resultado.csv]
 ```
 
+### Benchmark da geração no servidor
+
+Separa DB load e serialização por formato (sem transferir payload no body):
+
+```bash
+python scripts/benchmark_geracao.py [--url http://localhost:8081] [--runs 5] [--mode full]
+python scripts/benchmark_geracao.py [--url http://localhost:8081] [--runs 5] [--mode map]
+```
+
 ### Benchmark de leitura para mapa
 
-Mede o tempo desde o request até a lista de `(latitude, longitude)` pronta para uso no mapa (GET + deserialização + extração), para Protobuf, SQLite e JSON:
+Mede o tempo desde o request até a lista de `(latitude, longitude)` pronta para uso no mapa (GET + deserialização + extração):
 
 ```bash
 pip install -r scripts/requirements.txt
-python scripts/benchmark_map_leitura.py [--url http://localhost:8081] [--runs 3]
+python scripts/benchmark_map_leitura.py [--url http://localhost:8081] [--runs 3] [--mode full]
+python scripts/benchmark_map_leitura.py [--url http://localhost:8081] [--runs 3] [--mode map]
 ```
 
 O código Python do proto está em `scripts/benchmark/sync_pb2.py`. Para regenerar a partir do `.proto`: `protoc -I src/main/proto --python_out=scripts src/main/proto/sync.proto` (requer `protobuf-compiler` instalado).
@@ -88,7 +117,8 @@ O código Python do proto está em `scripts/benchmark/sync_pb2.py`. Para regener
 Mede apenas o tempo de parse (sem rede): um GET por formato, depois N deserializações em memória. Útil para comparar custo de interpretação Protobuf vs JSON vs SQLite.
 
 ```bash
-python scripts/benchmark_deserializacao.py [--url http://localhost:8081] [--runs 10]
+python scripts/benchmark_deserializacao.py [--url http://localhost:8081] [--runs 10] [--mode full]
+python scripts/benchmark_deserializacao.py [--url http://localhost:8081] [--runs 10] [--mode map]
 ```
 
 ### Testes adicionais (resultados-benchmark.md)

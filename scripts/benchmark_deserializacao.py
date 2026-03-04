@@ -5,7 +5,7 @@ Faz um GET por formato, guarda o payload em memória, depois roda N vezes só a
 deserialização + extração de (lat, long) e reporta tempo médio/min/max por parse.
 
 Uso:
-  python benchmark_deserializacao.py [--url BASE_URL] [--runs N]
+  python benchmark_deserializacao.py [--url BASE_URL] [--runs N] [--mode full|map]
 """
 
 import argparse
@@ -40,7 +40,7 @@ def fetch_bin(url: str) -> bytes:
 
 
 def fetch_json(url: str) -> bytes:
-    r = requests.get(url.rstrip("/") + "/api/items", timeout=300)
+    r = requests.get(url.rstrip("/") + "/api/snapshot/download/json", timeout=300)
     r.raise_for_status()
     return r.content
 
@@ -51,8 +51,32 @@ def fetch_sqlite(url: str) -> bytes:
     return r.content
 
 
+def fetch_map_sqlite(url: str) -> bytes:
+    r = requests.get(url.rstrip("/") + "/api/snapshot/download/map-sqlite", timeout=300)
+    r.raise_for_status()
+    return r.content
+
+
 def parse_protobuf(data: bytes) -> list:
     snapshot = sync_pb2.SnapshotResponse()
+    snapshot.ParseFromString(data)
+    return [(float(item.latitude), float(item.longitude)) for item in snapshot.items]
+
+
+def fetch_map_bin(url: str) -> bytes:
+    r = requests.get(url.rstrip("/") + "/api/snapshot/download/map-bin", timeout=300)
+    r.raise_for_status()
+    return r.content
+
+
+def fetch_map_json(url: str) -> bytes:
+    r = requests.get(url.rstrip("/") + "/api/snapshot/download/map-json", timeout=300)
+    r.raise_for_status()
+    return r.content
+
+
+def parse_map_protobuf(data: bytes) -> list:
+    snapshot = sync_pb2.MapSnapshotResponse()
     snapshot.ParseFromString(data)
     return [(float(item.latitude), float(item.longitude)) for item in snapshot.items]
 
@@ -69,7 +93,10 @@ def parse_sqlite(data: bytes) -> list:
         path = f.name
     conn = sqlite3.connect(path)
     try:
-        cur = conn.execute("SELECT latitude, longitude FROM item")
+        try:
+            cur = conn.execute("SELECT latitude, longitude FROM item")
+        except sqlite3.OperationalError:
+            cur = conn.execute("SELECT latitude, longitude FROM item_map")
         rows = cur.fetchall()
     except sqlite3.OperationalError as e:
         if "no such column" in str(e):
@@ -87,6 +114,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark de deserialização isolada (sem rede)")
     parser.add_argument("--url", default="http://localhost:8081", help="URL base da API")
     parser.add_argument("--runs", type=int, default=10, metavar="N", help="Execuções de parse por formato (default: 10)")
+    parser.add_argument("--mode", choices=["full", "map"], default="full", help="Modo do payload: full ou map")
     args = parser.parse_args()
 
     if args.runs < 1:
@@ -98,13 +126,21 @@ def main() -> None:
 
     print(f"Base URL: {args.url}")
     print(f"Parse isolado (sem rede), {args.runs} runs por formato.")
+    print(f"Modo: {args.mode}")
     print()
 
-    configs = [
-        ("Protobuf (.bin)", fetch_bin, parse_protobuf),
-        ("SQLite (.sqlite)", fetch_sqlite, parse_sqlite),
-        ("JSON (getAll)", fetch_json, parse_json),
-    ]
+    if args.mode == "map":
+        configs = [
+            ("Protobuf map (.bin)", fetch_map_bin, parse_map_protobuf),
+            ("SQLite map (.sqlite)", fetch_map_sqlite, parse_sqlite),
+            ("JSON map (.json)", fetch_map_json, parse_json),
+        ]
+    else:
+        configs = [
+            ("Protobuf full (.bin)", fetch_bin, parse_protobuf),
+            ("SQLite full (.sqlite)", fetch_sqlite, parse_sqlite),
+            ("JSON full (.json)", fetch_json, parse_json),
+        ]
 
     for label, fetch, parse in configs:
         if "Protobuf" in label and sync_pb2 is None:

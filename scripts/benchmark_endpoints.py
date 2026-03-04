@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Benchmark dos 3 endpoints de exportação: tempo de transação, processamento (servidor)
-e quantidade de banda (tamanho da resposta).
+Benchmark de download puro (snapshots pré-gerados no MinIO):
+tempo de transação, processamento (servidor) e banda (tamanho da resposta).
 
 Uso:
-  python benchmark_endpoints.py [--url BASE_URL] [--runs N] [--csv ARQUIVO]
+  python benchmark_endpoints.py [--url BASE_URL] [--runs N] [--mode full|map] [--csv ARQUIVO]
 
 O servidor envia o tempo de processamento no header X-Processing-Ms (em ms).
 """
@@ -24,10 +24,16 @@ except ImportError:
 
 HEADER_PROCESSING_MS = "X-Processing-Ms"
 
-ENDPOINTS = [
-    ("Protobuf (.bin)", "/api/snapshot/download/bin"),
-    ("SQLite (.sqlite)", "/api/snapshot/download/sqlite"),
-    ("JSON (getAll)", "/api/items"),
+ENDPOINTS_FULL = [
+    ("Protobuf full (.bin)", "/api/snapshot/download/bin"),
+    ("SQLite full (.sqlite)", "/api/snapshot/download/sqlite"),
+    ("JSON full (.json)", "/api/snapshot/download/json"),
+]
+
+ENDPOINTS_MAP = [
+    ("Protobuf map (.bin)", "/api/snapshot/download/map-bin"),
+    ("SQLite map (.sqlite)", "/api/snapshot/download/map-sqlite"),
+    ("JSON map (.json)", "/api/snapshot/download/map-json"),
 ]
 
 
@@ -53,7 +59,7 @@ def format_size(n: int) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark dos endpoints Protobuf, SQLite e JSON")
+    parser = argparse.ArgumentParser(description="Benchmark de download puro (Protobuf, SQLite e JSON)")
     parser.add_argument(
         "--url",
         default="http://localhost:8081",
@@ -71,6 +77,12 @@ def main() -> None:
         metavar="ARQUIVO",
         help="Exportar resultado em CSV",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["full", "map"],
+        default="full",
+        help="Modo dos endpoints (default: full)",
+    )
     args = parser.parse_args()
 
     if args.runs < 1:
@@ -79,11 +91,13 @@ def main() -> None:
 
     print(f"Base URL: {args.url}")
     print(f"Execuções por endpoint: {args.runs}")
+    print(f"Modo: {args.mode}")
     print()
 
     all_rows = []
+    endpoints = ENDPOINTS_MAP if args.mode == "map" else ENDPOINTS_FULL
 
-    for label, path in ENDPOINTS:
+    for label, path in endpoints:
         times_s: List[float] = []
         sizes: List[int] = []
         processings_ms: List[int] = []

@@ -28,6 +28,10 @@ public class SnapshotService implements ApplicationRunner {
     /** Nomes fixos no MinIO: sempre sobrescreve, mantém só a última versão (para front/mobile substituírem cache). */
     private static final String OBJECT_SNAPSHOT_BIN = "snapshot.bin";
     private static final String OBJECT_SNAPSHOT_SQLITE = "snapshot.sqlite";
+    private static final String OBJECT_SNAPSHOT_JSON = "snapshot.json";
+    private static final String OBJECT_SNAPSHOT_MAP_BIN = "snapshot-map.bin";
+    private static final String OBJECT_SNAPSHOT_MAP_JSON = "snapshot-map.json";
+    private static final String OBJECT_SNAPSHOT_MAP_SQLITE = "snapshot-map.sqlite";
 
     private final ItemRepository itemRepository;
     private final SnapshotExportService snapshotExportService;
@@ -64,6 +68,9 @@ public class SnapshotService implements ApplicationRunner {
         byte[] protoBytes = snapshotExportService.buildProtoSnapshot(items);
         long protoMs = System.currentTimeMillis() - t1;
         log.info("[3/5] Protobuf gerado: {} bytes em {} ms ({} KB)", protoBytes.length, protoMs, protoBytes.length / 1024);
+        byte[] mapProtoBytes = snapshotExportService.buildMapProtoSnapshot(items);
+        byte[] jsonBytes = snapshotExportService.buildJsonSnapshot(items);
+        byte[] mapJsonBytes = snapshotExportService.buildMapJsonSnapshot(items);
 
         byte[] sqliteBytes;
         log.info("[4/5] Gerando snapshot SQLite ({} itens)...", items.size());
@@ -76,6 +83,13 @@ public class SnapshotService implements ApplicationRunner {
         }
         long sqliteMs = System.currentTimeMillis() - t2;
         log.info("[4/5] SQLite gerado: {} bytes em {} ms ({} KB)", sqliteBytes.length, sqliteMs, sqliteBytes.length / 1024);
+        byte[] mapSqliteBytes;
+        try {
+            mapSqliteBytes = snapshotExportService.buildMapSqliteSnapshot(items);
+        } catch (Exception ex) {
+            log.error("Falha ao gerar snapshot SQLite map", ex);
+            throw new RuntimeException("Snapshot SQLite map falhou", ex);
+        }
 
         logMemoria("Após gerar Protobuf e SQLite");
 
@@ -92,6 +106,11 @@ public class SnapshotService implements ApplicationRunner {
             uploadToMinio(OBJECT_SNAPSHOT_SQLITE, "application/x-sqlite3", sqliteBytes);
             uploadSqliteMs = System.currentTimeMillis() - t4;
             log.info("[5/5] {} enviado em {} ms ({} bytes)", OBJECT_SNAPSHOT_SQLITE, uploadSqliteMs, sqliteBytes.length);
+
+            uploadToMinio(OBJECT_SNAPSHOT_JSON, "application/json", jsonBytes);
+            uploadToMinio(OBJECT_SNAPSHOT_MAP_BIN, "application/octet-stream", mapProtoBytes);
+            uploadToMinio(OBJECT_SNAPSHOT_MAP_JSON, "application/json", mapJsonBytes);
+            uploadToMinio(OBJECT_SNAPSHOT_MAP_SQLITE, "application/x-sqlite3", mapSqliteBytes);
         } catch (Exception ex) {
             log.error("Falha ao enviar ao MinIO", ex);
             throw new RuntimeException("Upload MinIO falhou", ex);
@@ -102,8 +121,13 @@ public class SnapshotService implements ApplicationRunner {
         log.info("========== Snapshot concluído ==========");
         log.info("Resumo: {} itens | total {} ms | DB {} ms | Protobuf {} ms | SQLite {} ms | upload .bin {} ms | upload .sqlite {} ms",
                 items.size(), totalMs, loadMs, protoMs, sqliteMs, uploadBinMs, uploadSqliteMs);
-        log.info("Objetos no MinIO: {} ({} bytes), {} ({} bytes)",
-                OBJECT_SNAPSHOT_BIN, protoBytes.length, OBJECT_SNAPSHOT_SQLITE, sqliteBytes.length);
+        log.info("Objetos no MinIO: {} ({} bytes), {} ({} bytes), {} ({} bytes), {} ({} bytes), {} ({} bytes), {} ({} bytes)",
+                OBJECT_SNAPSHOT_BIN, protoBytes.length,
+                OBJECT_SNAPSHOT_SQLITE, sqliteBytes.length,
+                OBJECT_SNAPSHOT_JSON, jsonBytes.length,
+                OBJECT_SNAPSHOT_MAP_BIN, mapProtoBytes.length,
+                OBJECT_SNAPSHOT_MAP_JSON, mapJsonBytes.length,
+                OBJECT_SNAPSHOT_MAP_SQLITE, mapSqliteBytes.length);
     }
 
     private void logMemoria(String momento) {

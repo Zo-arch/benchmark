@@ -7,6 +7,9 @@ Uso:
   python benchmark_map_leitura.py [--url BASE_URL] [--runs N]
 
 Mede: GET → deserializar → extrair lista de (latitude, longitude) → tempo total (ms) e tamanho (bytes).
+Suporta dois modos:
+  - full: payload completo (16 campos)
+  - map: payload reduzido para mapa (lat/lng + mínimos metadados)
 """
 
 import argparse
@@ -34,16 +37,29 @@ try:
 except ImportError:
     sync_pb2 = None
 
-ENDPOINTS = [
-    ("Protobuf (.bin)", "/api/snapshot/download/bin", "protobuf"),
-    ("SQLite (.sqlite)", "/api/snapshot/download/sqlite", "sqlite"),
-    ("JSON (getAll)", "/api/items", "json"),
+ENDPOINTS_FULL = [
+    ("Protobuf full (.bin)", "/api/snapshot/download/bin", "protobuf_full"),
+    ("SQLite full (.sqlite)", "/api/snapshot/download/sqlite", "sqlite"),
+    ("JSON full (.json)", "/api/snapshot/download/json", "json"),
+]
+
+ENDPOINTS_MAP = [
+    ("Protobuf map (.bin)", "/api/snapshot/download/map-bin", "protobuf_map"),
+    ("SQLite map (.sqlite)", "/api/snapshot/download/map-sqlite", "sqlite_map"),
+    ("JSON map (.json)", "/api/snapshot/download/map-json", "json"),
 ]
 
 
-def extract_points_protobuf(data: bytes) -> list:
+def extract_points_protobuf_full(data: bytes) -> list:
     """Deserializa .bin e retorna lista de (latitude, longitude)."""
     snapshot = sync_pb2.SnapshotResponse()
+    snapshot.ParseFromString(data)
+    return [(float(item.latitude), float(item.longitude)) for item in snapshot.items]
+
+
+def extract_points_protobuf_map(data: bytes) -> list:
+    """Deserializa snapshot de mapa em Protobuf e retorna lista de (latitude, longitude)."""
+    snapshot = sync_pb2.MapSnapshotResponse()
     snapshot.ParseFromString(data)
     return [(float(item.latitude), float(item.longitude)) for item in snapshot.items]
 
@@ -55,7 +71,10 @@ def extract_points_sqlite(data: bytes) -> list:
         path = f.name
     conn = sqlite3.connect(path)
     try:
-        cursor = conn.execute("SELECT latitude, longitude FROM item")
+        try:
+            cursor = conn.execute("SELECT latitude, longitude FROM item")
+        except sqlite3.OperationalError:
+            cursor = conn.execute("SELECT latitude, longitude FROM item_map")
         rows = cursor.fetchall()
     except sqlite3.OperationalError as e:
         if "no such column: latitude" in str(e) or "no such column: longitude" in str(e):
@@ -86,9 +105,11 @@ def run_one(url: str, path: str, fmt: str) -> tuple[float, int, list]:
     raw = r.content
     size = len(raw)
 
-    if fmt == "protobuf":
-        points = extract_points_protobuf(raw)
-    elif fmt == "sqlite":
+    if fmt == "protobuf_full":
+        points = extract_points_protobuf_full(raw)
+    elif fmt == "protobuf_map":
+        points = extract_points_protobuf_map(raw)
+    elif fmt == "sqlite" or fmt == "sqlite_map":
         points = extract_points_sqlite(raw)
     else:
         points = extract_points_json(raw)
@@ -121,6 +142,12 @@ def main() -> None:
         metavar="N",
         help="Número de execuções por formato (default: 3)",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["full", "map"],
+        default="full",
+        help="Modo de payload: full (completo) ou map (enxuto para mapa). Default: full",
+    )
     args = parser.parse_args()
 
     if args.runs < 1:
@@ -139,10 +166,13 @@ def main() -> None:
 
     print(f"Base URL: {args.url}")
     print(f"Execuções por formato: {args.runs}")
+    print(f"Modo: {args.mode}")
     print()
 
-    for label, path, fmt in ENDPOINTS:
-        if fmt == "protobuf" and sync_pb2 is None:
+    endpoints = ENDPOINTS_MAP if args.mode == "map" else ENDPOINTS_FULL
+
+    for label, path, fmt in endpoints:
+        if fmt.startswith("protobuf") and sync_pb2 is None:
             print(f"=== {label} ({path}) === (ignorado: sync_pb2 não disponível)")
             print()
             continue

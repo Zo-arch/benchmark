@@ -12,6 +12,21 @@ A partir desta versão, cada item possui **16 campos** (além do id), para simul
 
 O script `gerar_itens_aleatorios.py` preenche todos esses campos com dados aleatórios. **Recomendação:** resetar o banco, popular de novo e reiniciar o app antes de rodar os testes abaixo.
 
+## Auditoria da comparação
+
+Durante a auditoria foi identificado um ponto importante: parte dos benchmarks antigos misturava **camadas diferentes**.
+
+- Em alguns cenários, Protobuf/SQLite eram medidos com custo de geração completo (DB + serialização) no request.
+- JSON em `GET /api/items` também era gerado no request, mas com dinâmica diferente.
+- Isso pode fazer parecer que “JSON está mais rápido” em certos testes, mesmo com payload bem maior.
+
+Para comparação justa, os testes foram separados em:
+
+1. **Download puro** (`/api/snapshot/download/*`) com arquivos pré-gerados no MinIO.  
+2. **Geração no servidor** (`/api/benchmark/generate/*`) medindo `dbLoadMs` e `serializeMs`.  
+3. **Deserialização isolada** (script Python, sem rede).  
+4. **Tempo até mapa** em dois modos: `full` e `map`.
+
 ## Rotina de snapshot (inicialização do app)
 
 | Data       | Itens | Total (ms) | DB (ms) | Protobuf (ms) | SQLite (ms) | Upload .bin (ms) | Upload .sqlite (ms) | Tamanho .bin | Tamanho .sqlite |
@@ -83,9 +98,9 @@ Copie o bloco abaixo e preencha após cada execução.
 
 Cenário: front/mobile baixa o snapshot (Protobuf, SQLite ou JSON), deserializa e precisa da lista de pontos `(latitude, longitude)` pronta para inserir no mapa. O que medimos é o **tempo total** desde o request até essa lista pronta (GET + deserialização + extração dos pares lat/long), com `--runs N` para obter média, min e max.
 
-- **Protobuf:** GET `/api/snapshot/download/bin` → `ParseFromString` → lista de `(item.latitude, item.longitude)`.
-- **JSON:** GET `/api/items` → `json.loads` → lista de `(item['latitude'], item['longitude'])`.
-- **SQLite:** GET `/api/snapshot/download/sqlite` → abrir DB (arquivo temporário) → `SELECT latitude, longitude FROM item` → lista de tuplas.
+- **Modo full:** GET `/api/snapshot/download/bin|sqlite|json` → parse completo → extração de `(lat,long)`.
+- **Modo map:** GET `/api/snapshot/download/map-bin|map-json` (+ sqlite com `SELECT latitude, longitude`) → lista de pontos.
+- **Observação:** `GET /api/items` fica como endpoint dinâmico de referência, não como benchmark de download puro.
 
 Comando: `python3 ./scripts/benchmark_map_leitura.py [--url BASE_URL] [--runs N]`.
 
@@ -258,6 +273,109 @@ Baixa uma vez cada formato; em seguida mede apenas o tempo de deserializar + ext
 **500k itens:** Parse isolado ~760 ms (Protobuf), ~394 ms (SQLite), ~1524 ms (JSON). JSON continua ~2× mais lento que Protobuf no parse; em leitura para mapa, 500k pontos ficam prontos em ~5,1 s (Protobuf), ~4,8 s (SQLite) e ~5,9 s (JSON).
 
 **1M itens:** Parse isolado ~1485 ms (Protobuf), ~829 ms (SQLite), ~3009 ms (JSON). Em leitura para mapa, 1M de pontos ficam prontos em ~10,2 s (Protobuf), ~9,4 s (SQLite) e ~11,4 s (JSON). A diferença entre JSON e Protobuf se mantém (JSON ~2× mais lento no parse, payload bem maior), e o SQLite continua o mais rápido na extração dos pontos brutos.
+
+---
+
+## Critérios de decisão arquitetural (consolidados)
+
+- **First sync (dispositivo virgem):** usar snapshot **SQLite** completo (`snapshot.sqlite`) para attach local rápido e sem custo de UPSERT em massa.
+- **Delta sync (atualizações):** usar **Protobuf map/delta** (`snapshot-map.bin` ou payload incremental equivalente), reduzindo banda e tempo de parse.
+- **JSON:** manter para compatibilidade/inspeção humana e debug, não como formato principal para grande volume.
+- **Benchmark oficial para comparação de transporte:** usar somente endpoints de **download puro** (`/api/snapshot/download/*`), com payload pré-gerado no MinIO.
+- **Benchmark de geração:** medir separadamente em `/api/benchmark/generate/*` (`dbLoadMs` + `serializeMs`) para não contaminar conclusões de transporte.
+
+---
+
+## O que mudou de antes para hoje (metodologia)
+
+Nas medições iniciais, parte dos números comparava formatos com **custos misturados** no mesmo endpoint (ex.: leitura do banco + serialização + resposta HTTP). Isso gerava viés metodológico: em alguns cenários, o tempo observado refletia mais a implementação do endpoint do que o formato de serialização em si.
+
+A partir de 2026-03-04, a metodologia foi ajustada para comparação **justa por camada**:
+
+1. **Download puro**: arquivos já prontos no MinIO (`/api/snapshot/download/*`), isolando rede + transferência.
+2. **Geração no servidor**: benchmark separado de `DB load + serialização` (`/api/benchmark/generate/*`), sem confundir com latência de download.
+3. **Parse isolado**: deserialização sem rede.
+4. **Tempo até mapa**: request + parse + lista de pontos pronta.
+5. **Dois perfis de payload**:
+   - **full** (16 campos por item),
+   - **map** (payload enxuto para mapa: `id`, `latitude`, `longitude`, `updatedAt`).
+
+Com essa separação, os resultados passaram a refletir melhor o comportamento real de cada formato em cada etapa. Assim, a análise deixa de ser “qual formato é sempre mais rápido” e passa a ser “qual formato é melhor para cada etapa da arquitetura”.
+
+---
+
+## Resultado consolidado (arquitetura separada por camada) - 2026-03-04
+
+Dataset: **1.000.000 itens** (16 campos no snapshot full).  
+Camadas medidas: geração de snapshot, download puro, parse isolado e tempo até pontos no mapa.
+
+### 1) Rotina de snapshot na inicialização (full)
+
+| Data | Itens | Total (ms) | DB (ms) | Protobuf (ms) | SQLite (ms) | Upload .bin (ms) | Upload .sqlite (ms) | Tamanho .bin | Tamanho .sqlite | Tamanho .json | Tamanho map.bin | Tamanho map.json |
+|------|-------|------------|---------|---------------|-------------|------------------|---------------------|--------------|-----------------|---------------|------------------|------------------|
+| 2026-03-04 | 1.000.000 | 33978 | 6955 | 3061 | 3026 | 4737 | 4889 | 533278439 (508,57 MB) | 569335808 (542,96 MB) | 716132530 (682,96 MB) | 30983529 (29,55 MB) | 86666952 (82,65 MB) |
+
+### 2) Download puro (`benchmark_endpoints.py --runs 5`)
+
+**Modo full**
+
+| Formato | Tempo médio (ms) | min-max (ms) | Banda (bytes) | X-Processing-Ms (médio) |
+|---------|------------------|--------------|---------------|--------------------------|
+| Protobuf full (.bin) | 930,83 | 909,48-965,95 | 533278439 (508,57 MB) | 275,80 |
+| SQLite full (.sqlite) | 1041,46 | 997,53-1075,46 | 569335808 (542,96 MB) | 329,00 |
+| JSON full (.json) | 1285,35 | 1239,82-1340,69 | 716132530 (682,96 MB) | 402,60 |
+
+**Modo map**
+
+| Formato | Tempo médio (ms) | min-max (ms) | Banda (bytes) | X-Processing-Ms (médio) |
+|---------|------------------|--------------|---------------|--------------------------|
+| Protobuf map (.bin) | 76,85 | 66,45-116,57 | 30983529 (29,55 MB) | 27,00 |
+| SQLite map (.sqlite) | 66,20 | 60,39-70,77 | 33374208 (31,83 MB) | 24,20 |
+| JSON map (.json) | 155,87 | 152,27-159,34 | 86666952 (82,65 MB) | 46,40 |
+
+### 3) Parse isolado (`benchmark_deserializacao.py --runs 5`)
+
+**Modo full**
+
+| Formato | Payload (bytes) | Tempo médio parse (ms) | min-max (ms) |
+|---------|------------------|------------------------|--------------|
+| Protobuf full (.bin) | 533278439 | 1429,55 | 1369,11-1646,29 |
+| SQLite full (.sqlite) | 569335808 | 808,21 | 756,72-843,66 |
+| JSON full (.json) | 716132530 | 2920,22 | 2832,20-3012,30 |
+
+**Modo map**
+
+| Formato | Payload (bytes) | Tempo médio parse (ms) | min-max (ms) |
+|---------|------------------|------------------------|--------------|
+| Protobuf map (.bin) | 30983529 | 363,52 | 357,99-371,23 |
+| SQLite map (.sqlite) | 33374208 | 362,39 | 348,17-394,26 |
+| JSON map (.json) | 86666952 | 547,13 | 498,33-593,79 |
+
+### 4) Tempo até dados prontos para mapa (`benchmark_map_leitura.py --runs 5`)
+
+**Modo full**
+
+| Formato | Tempo médio (ms) | min-max (ms) | Tamanho (bytes) | Pontos |
+|---------|------------------|--------------|-----------------|--------|
+| Protobuf full (.bin) | 2295,24 | 2190,11-2454,40 | 533278439 (508,57 MB) | 1000000 |
+| SQLite full (.sqlite) | 1676,97 | 1531,01-1775,22 | 569335808 (542,96 MB) | 1000000 |
+| JSON full (.json) | 4147,87 | 4014,25-4343,37 | 716132530 (682,96 MB) | 1000000 |
+
+**Modo map**
+
+| Formato | Tempo médio (ms) | min-max (ms) | Tamanho (bytes) | Pontos |
+|---------|------------------|--------------|-----------------|--------|
+| Protobuf map (.bin) | 381,26 | 363,74-424,28 | 30983529 (29,55 MB) | 1000000 |
+| SQLite map (.sqlite) | 396,87 | 383,28-422,63 | 33374208 (31,83 MB) | 1000000 |
+| JSON map (.json) | 653,39 | 623,10-693,33 | 86666952 (82,65 MB) | 1000000 |
+
+### Análise técnica (por que os resultados ficaram assim)
+
+- **Download puro full:** Protobuf vence porque transfere menos bytes que SQLite e muito menos que JSON; com payload já pronto no MinIO, o custo de geração não contamina a comparação.
+- **Download/parse map (comparação justa):** com `snapshot-map.sqlite`, Protobuf map (29,55 MB) e SQLite map (31,83 MB) ficam muito próximos em banda e latência de download; ambos ficam bem à frente do JSON map (82,65 MB).
+- **Parse map:** Protobuf map e SQLite map empataram na prática (~363 ms), mostrando que o SQLite deixa de ser “penalizado” quando também recebe payload enxuto.
+- **JSON full:** além de maior payload, paga parse de texto e alocação de objetos; por isso piora bastante no tempo até dados prontos.
+- **Conclusão prática:** para **first sync** grande, SQLite segue excelente; para **delta/mapa**, Protobuf map e SQLite map formam as duas melhores opções técnicas (com vantagem de menor banda para Protobuf e leve vantagem de download para SQLite nesta rodada).
 
 ---
 
